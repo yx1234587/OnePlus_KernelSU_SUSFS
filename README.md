@@ -11,7 +11,7 @@ By flashing this kernel, **YOU** are choosing to make these modifications. If so
 ---
 
 ### Proceed at your own risk!
-  
+
 <table>
   <tr>
     <th> :warning: </th>
@@ -34,6 +34,7 @@ By flashing this kernel, **YOU** are choosing to make these modifications. If so
 
 [Kernel Patches](https://github.com/WildKernels/kernel_patches)  
 [Old Build Scripts](https://github.com/TheWildJames/kernel_build_scripts)  
+[Kernel Flasher - fatalcoder524 fork](https://github.com/fatalcoder524/KernelFlasher)  
 [Horizon Kernel Flasher](https://github.com/libxzr/HorizonKernelFlasher)  
 
 ---
@@ -79,12 +80,6 @@ If you encounter any issues or need help, feel free to open an issue in this rep
 Flashing this kernel will void your warranty, and there is always a risk of bricking your device. Please make sure to back up your data and ensure you understand the risks before proceeding.
 
 **Proceed at your own risk!**
-
----
-
-# To-DO
-
-- [X] Get Stoned & Build kernels!
 
 ---
 

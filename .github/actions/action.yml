@@ -124,7 +124,13 @@ runs:
           
           # Initialize and sync kernel source
           echo "Initializing and syncing kernel source..."
-          $REPO init -u https://github.com/OnePlusOSS/kernel_manifest.git -b ${{ inputs.branch }} -m ${{ inputs.manifest }} --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
+          if [[ "${{ inputs.manifest }}" == https://* ]]; then
+            mkdir -p .repo/manifests
+            curl -Ls ${{ inputs.manifest }} -o .repo/manifests/temp_manifest.xml
+            $REPO init -u https://github.com/OnePlusOSS/kernel_manifest.git -b oneplus/sm8650 -m temp_manifest.xml --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
+          else
+            $REPO init -u https://github.com/OnePlusOSS/kernel_manifest.git -b ${{ inputs.branch }} -m ${{ inputs.manifest }} --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
+          fi
           
           # Sync repo and apply patches
           $REPO --version
@@ -177,9 +183,9 @@ runs:
             "v1.5.5"|"v1.5.6"|"v1.5.7")
               cp "../../../kernel_patches/next/0001-kernel-implement-susfs-v1.5.5-v1.5.7-KSUN-v1.0.8.patch" "./ksun_susfs_latest.patch"
               ;;
-            "v1.5.8"|"v1.5.9")
+            "v1.5.8")
               cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
-              patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch || true
+              patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch  || true
               cp "../../../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_apk_sign.c.patch" ./
               patch -p1 --forward --fuzz=3 < fix_apk_sign.c.patch
               cp "../../../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_core_hook.c.patch" ./
@@ -188,6 +194,18 @@ runs:
               patch -p1 --forward --fuzz=3 < fix_selinux.c.patch
               cp "../../../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_ksud.c.patch" ./
               patch -p1 --forward --fuzz=3 < fix_ksud.c.patch
+              ;;
+            "v1.5.9")
+              cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
+              patch -p1 --forward < 10_enable_susfs_for_ksu.patch  || true
+              
+              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -printf "%f\n" | cut -d'.' -f1); do
+                  echo "Patching file: $file.c with fix_$file.c.patch"
+                  patch -p1 --forward < "../../../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_$file.c.patch"
+              done
+              
+              # Fix build errors (no rejects; Still giving errors)
+              patch -p1 --forward < "../../../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_kernel_compat.c.patch"
               ;;
             *)
               echo "Invalid version: $susfs_version"
@@ -199,6 +217,7 @@ runs:
           
           # Change to common directory and apply SUSFS patch
           cd ../common
+          
           if [ "${{ inputs.android_version }}" = "android15" ] && [ "${{ inputs.kernel_version }}" = "6.6" ]; then
               if ! grep -qxF '#include <trace/hooks/fs.h>' ./fs/namespace.c; then
                   sed -i '/#include <trace\/hooks\/blk.h>/a #include <trace\/hooks\/fs.h>' ./fs/namespace.c
@@ -237,7 +256,7 @@ runs:
           cd "$CONFIG/kernel_platform/common"
           echo "Applying KSUN Hooks..."
           cp ../../../kernel_patches/next/scope_min_manual_hooks_v1.4.patch ./manual_hooks.patch
-          patch -p1 --fuzz=3 < ./manual_hooks.patch
+          patch -p1 < ./manual_hooks.patch
           
       - name: Apply Hide Stuff Patches
         shell: bash
@@ -391,6 +410,7 @@ runs:
           fi
 
       - name: Create ZIP Files for Different Formats
+        id: create_zip
         shell: bash
         run: |
           echo "Changing to configuration directory: $CONFIG..."
@@ -412,9 +432,65 @@ runs:
           echo "Creating zip file $ZIP_NAME..."
           zip -r "../$ZIP_NAME" ./*
 
+      - name: Save Build Metadata
+        shell: bash
+        if: success() && steps.create_zip.conclusion == 'success'
+        id: save_metadata
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ -z "$(ls *.zip 2>/dev/null)" ]; then
+            echo "No kernel zip found! Artifact upload might be fake."
+            exit 1
+          fi
+          
+          cd "$CONFIG/kernel_platform/common"
+          CONFIG_FILES=("build.config.common" "build.config.constants")
+          BRANCH_LINE=""
+          
+          for file in "${CONFIG_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              line=$(grep '^[[:space:]]*BRANCH=' "$file" | head -n1 || true)
+              if [ -n "$line" ]; then
+                BRANCH_LINE="$line"
+                echo "Found BRANCH in: $file"
+                break  # Found it — exit loop
+              else
+                echo "File exists but no BRANCH= found: $file"
+              fi
+            else
+              echo "File not found: $file"
+            fi
+          done
+          
+          if [ -z "$BRANCH_LINE" ]; then
+            echo "Error: No BRANCH= found in any of: ${CONFIG_FILES[*]}"
+            exit 1
+          fi
+          
+          BRANCH_VALUE="${BRANCH_LINE#*=}"
+          ANDROID_VERSION="${BRANCH_VALUE%-*}"
+          
+          if [ -z "$ANDROID_VERSION" ]; then
+            echo "Error: Could not extract 'androidXX' from BRANCH='$BRANCH_VALUE'"
+            exit 1
+          fi
+          
+          # Extract values using grep and awk
+          VERSION=$(grep '^VERSION *=' Makefile | awk '{print $3}')
+          PATCHLEVEL=$(grep '^PATCHLEVEL *=' Makefile | awk '{print $3}')
+          SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | awk '{print $3}')
+          FULL_VERSION="$VERSION.$PATCHLEVEL.$SUBLEVEL"
+          
+          echo "Kernel Version: $ANDROID_VERSION-$FULL_VERSION"
+          
+          cd "$GITHUB_WORKSPACE"
+          echo "$ANDROID_VERSION-$FULL_VERSION" > ${{ inputs.model }}.txt
+
       - name: Upload Build Artifacts
+        id: upload_ak3_zip
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ env.CONFIG }}
           path: |
+            ${{ inputs.model }}.txt
             *.zip
